@@ -1,5 +1,7 @@
 # Live Captions Lab · Windows 11 实时字幕实验工具箱
 
+> 仓库地址：https://github.com/TrueFurina/livecaption-lab  ·  许可证：MIT
+
 Windows 11 自带「实时字幕」（Win+Ctrl+L），识别很准、全本地、不出网，但**微软没有提供任何"把字幕存成文件"的功能**。
 本项目用 Windows UI Automation 读取字幕窗口，把字幕流抓出来做二次利用，并附带一套小工具。
 
