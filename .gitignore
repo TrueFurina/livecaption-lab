@@ -1,0 +1,18 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ---- 运行时 / 测试生成的产物（非源码）----
+cache/
+logs/
+shots/
+reports/
+notes/
+
+# ---- 编辑器 / 系统 ----
+.DS_Store
+*.swp
+Thumbs.db

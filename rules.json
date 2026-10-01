@@ -1,0 +1,60 @@
+{
+  "cooldown": 4,
+  "rules": [
+    {
+      "name": "记一下",
+      "keywords": [
+        "记一下",
+        "记下来",
+        "备注一下"
+      ],
+      "action": "note"
+    },
+    {
+      "name": "截图",
+      "keywords": [
+        "截图",
+        "截个图",
+        "截屏"
+      ],
+      "action": "screenshot"
+    },
+    {
+      "name": "打开记事本",
+      "keywords": [
+        "打开记事本"
+      ],
+      "action": "open",
+      "target": "notepad.exe"
+    },
+    {
+      "name": "打开浏览器",
+      "keywords": [
+        "打开浏览器",
+        "上网"
+      ],
+      "action": "open",
+      "target": "https://www.bing.com"
+    },
+    {
+      "name": "播放暂停",
+      "keywords": [
+        "暂停播放",
+        "继续播放"
+      ],
+      "action": "hotkey",
+      "keys": [
+        "space"
+      ]
+    },
+    {
+      "name": "下班打卡",
+      "keywords": [
+        "下班了",
+        "收工"
+      ],
+      "action": "notify",
+      "say": "辛苦了，记得先保存文件"
+    }
+  ]
+}
