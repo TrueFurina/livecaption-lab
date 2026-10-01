@@ -259,12 +259,12 @@ class CaptionTap:
 
         self._seen: deque[str] = deque(maxlen=dedup_mem)
         self._seen_set: set[str] = set()
-        self._pending: str | None = None   # 正在增长、尚未定稿的那句
+        self._pending: str | None = None   # 正在增长、尚未定稿的那句（= 窗口最后一行）
         self._pending_ts: float = 0.0
         self._prev_tail: str = ""          # 上一次看到的最后一行
+        self._prev_n: int = 0              # 上一次看到的可见行数（用于判断"新行出现"）
         self._primed: bool = False         # 是否已跳过历史字幕
-        self._flushed: bool = False        # 当前这句是否已因空闲超时输出过
-        self._last_emitted: str = ""       # 最近一次输出的完整文本，用于只吐增量
+        self._pending_committed: bool = False  # 当前这句是否已定稿输出过（防重复 flush）
         self.prime_window: float = 1.5     # 连接后头几秒算历史
         self._start_ts: float = 0.0
         self.flush_idle = flush_idle
@@ -379,20 +379,6 @@ class CaptionTap:
                 lines.append(l)
         return "".join(lines)
 
-    def _strip_prefix(self, text: str) -> tuple[str | None, bool]:
-        """剥掉已经输出过的前缀，返回 (增量, 是否为扩展)。
-
-        返回 (None, True) 表示这次内容全是已有内容，没有新东西。
-        """
-        cands = [self._last_emitted] + [l.text for l in self.lines[-10:]]
-        for p in cands:
-            if not p or p == text:
-                continue
-            if text.startswith(p):
-                out = text[len(p):].lstrip("，,、；; ")
-                return (out or None), True
-        return text, False
-
     def _is_redundant(self, text: str) -> bool:
         """新句是不是已被输出过的内容覆盖（重复句 / 碎片）。
 
@@ -410,8 +396,13 @@ class CaptionTap:
                 return True
         return False
 
-    def _commit(self, text: str) -> None:
-        """定稿输出一句（同一句只输出一次）。"""
+    def _commit_full(self, text: str) -> None:
+        """定稿输出一句完整句子：同一句只输出一次（精确去重 + 近似去重）。
+
+        本方法接收的是"已经定稿/完整的句子"，不做增量剥离——
+        增量剥离改由 _feed_sentence 通过"只在换句/空闲时才提交上一句"
+        的策略完成，以此根治早期版本"同一段话被反复整段吐出"的 bug。
+        """
         text = (text or "").strip()
         if not text or is_placeholder(text):
             return
@@ -419,29 +410,17 @@ class CaptionTap:
             return
         if self._is_seen(text):
             return
-
-        # ASR 会把连着说的几句用逗号串成累积长句，所以先剥离已知前缀，
-        # 只留增量。顺序很关键：必须先剥离再判冗余，否则"长累积句+短增量"
-        # 会被冗余规则当成重复内容整句吞掉（实测踩过）。
-        out, extended = self._strip_prefix(text)
-        if out is None:
-            return
-        # 增量可能只剩一个句号，按去掉标点后的有效字数再判一次
-        if len(out.strip("。！？，、；,.!? ")) < self.min_chars:
-            return
-        if not extended and self._is_redundant(text):
+        # ASR 偶尔回头修订已经定稿的句子（滚动缓冲里同一句换个写法再出现），
+        # 用最长公共子串比例挡掉这种近似重复，避免整段重复落盘。
+        if self._is_redundant(text):
             self._remember(text)
             return
-
-        if self._is_seen(out):
-            return
-        self._last_emitted = text
-        self._remember(out)
+        self._remember(text)
         self._seq += 1
         now_dt = datetime.now()
         self._emit(
             CaptionLine(
-                text=out,
+                text=text,
                 ts=time.time(),
                 iso=now_dt.strftime("%H:%M:%S"),
                 seq=self._seq,
@@ -449,10 +428,10 @@ class CaptionTap:
         )
 
     def _flush_pending(self) -> None:
-        """空闲超时或抓取结束时，把当前这句定稿输出。"""
-        if self._prev_tail:
-            self._commit(self._prev_tail)
-            self._flushed = True
+        """空闲超时或抓取结束时，把当前这句定稿输出（只输出一次）。"""
+        if self._pending is not None and not self._pending_committed:
+            self._commit_full(self._pending)
+            self._pending_committed = True
         self._pending = None
         self._pending_ts = 0.0
 
@@ -462,63 +441,72 @@ class CaptionTap:
         没有这条，遇到 ASR 迟迟不补句号的长句（实测会把多句用逗号连起来）
         会一直憋着不输出，实时性很差。
         """
-        if self._pending and self._pending_ts and self.flush_idle > 0:
+        if (
+            self._pending is not None
+            and not self._pending_committed
+            and self._pending_ts
+            and self.flush_idle > 0
+        ):
             if time.time() - self._pending_ts >= self.flush_idle:
                 self._flush_pending()
 
     def _feed_sentence(self, raw: str) -> None:
-        """sentence 模式：按"末尾追加 + 逐字增长"的真实行为切句。
+        """sentence 模式：只在"句子定稿"时吐一次完整句，绝不整段重复。
 
-        实测（见 debug_raw.py 的输出）搞清楚的行为：
+        实测确认的窗口行为：
           1. 字幕窗口是累积日志，历史行不会变，新句子作为新行追加在末尾；
-          2. 正在说的那一句在最后一行里逐字增长。
-        因此正确做法是：忽略历史行，只盯最后一行，用前缀关系判断
-        它是在增长还是换了新句；换句时把上一句定稿输出。
+          2. 正在说的那一句在最后一行里逐字增长（ASR 还可能回头修订句首）。
+
+        早期版本在"句子增长"时把整段重新 commit，于是同一段话被反复整段
+        吐出（见某次归档里"发芽了…"那几行）。改为：
+          - 最后一行（live tail）增长 / 修订时【不提交】，只把它当作
+            "当前句"缓存；
+          - 只有当它下面出现新的一行（=这句话说完了）或窗口行数变化
+            （滚动 / 新增），才把上一句提交一次；
+          - 提交前用精确 + 近似去重兜底滚动缓冲里的重复 / 修订。
+        这样每段话无论 ASR 怎么修订句首，都只会出现一次、且是最终版本。
         """
         lines = [l.strip() for l in raw.splitlines() if l.strip()]
         lines = [l for l in lines if not is_placeholder(l)]
         if not lines:
             return
 
-        # 连接后的头 prime_window 秒里读到的都算"历史"，不输出。
-        # 不能简单把"第一次读到的内容"当历史 —— 那样会把刚开始说的
-        # 第一句也吞掉（实测踩过）。用时间窗更稳。
         if not self._primed:
             if self._start_ts and (time.time() - self._start_ts) < self.prime_window:
                 for l in lines:
                     self._remember(l)
                 self._prev_tail = lines[-1]
+                self._prev_n = len(lines)
+                self._pending = lines[-1]
+                self._pending_ts = time.time()
                 return
             self._primed = True
 
-        # 非最后一行若有新内容，说明已成行，直接定稿
-        for l in lines[:-1]:
-            self._commit(l)
-
         tail = lines[-1]
-        if tail == self._prev_tail:
-            return
 
-        if self._prev_tail and (
-            tail.startswith(self._prev_tail) or self._prev_tail.startswith(tail)
-        ):
-            # 同一句在增长：补齐被空闲超时截断掉的后续内容
-            if len(tail) >= len(self._prev_tail):
-                delta = tail[len(self._prev_tail):]
-                self._prev_tail = tail
-                self._pending = tail
-                self._pending_ts = time.time()
-                if self._flushed and len(delta) >= 8:
-                    self._commit(delta)
-            return
+        # 出现在"最后一行之上"的历史行 = 已定稿的句子，逐行提交；
+        # 去重由 _commit_full 兜底，快速连说时也能完整捕获、不漏句。
+        for l in lines[:-1]:
+            if l == self._prev_tail:
+                self._pending_committed = True  # 上一句已作为历史行提交过
+            self._commit_full(l)
 
-        # 换了新的一句：先把上一句定稿吐出去
-        if self._prev_tail:
-            self._commit(self._prev_tail)
+        # 边界判定：上一句被新行顶替（在历史行里出现）或窗口行数变化
+        # （新增 / 滚动）→ 上一句已定稿，提交一次。
+        boundary = bool(self._prev_tail) and (
+            self._prev_tail in lines[:-1] or len(lines) != self._prev_n
+        )
+        if boundary and not self._pending_committed:
+            self._commit_full(self._prev_tail)
+            self._pending_committed = True
+
+        # 更新锚点：当前句 = 最后一行（始终取最新修订版）。
         self._prev_tail = tail
+        self._prev_n = len(lines)
         self._pending = tail
         self._pending_ts = time.time()
-        self._flushed = False
+        if boundary:
+            self._pending_committed = False  # 新的一句从零开始计数
 
     def _new_lines(self, raw: str) -> list[str]:
         """从窗口当前文本里挑出真正新增的行。"""
