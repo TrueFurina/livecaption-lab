@@ -43,6 +43,35 @@ Windows 11 自带「实时字幕」（Win+Ctrl+L），识别很准、全本地�
 
 ---
 
+## 仓库结构
+
+```text
+livecaption-lab/
+├── caption_source.py   # 抓取核心 CaptionTap：UIA 轮询 + 累积日志切句 + Markdown 自动归档
+├── record.py           # 纯字幕记录器：开字幕即录、关窗口即停（事件驱动，不用时零进程）
+├── start.py            # 统一入口菜单（start.py <别名> [参数]）
+├── 记录字幕.bat         # 桌面一键启动器（双击即录）
+│
+├── 上层应用/
+│   ├── voice_remote.py  # 语音遥控器（+ rules.json 动作配置）
+│   ├── overlay.py       # 双语字幕浮层（Win32 原生分层窗口，默认可开翻译）
+│   ├── meeting_notes.py # 会议纪要规则引擎（零成本，+ summarizer.py 可选 LLM 层）
+│   ├── live_dashboard.py# 实时看板（本地 HTTP + 浏览器：词云 / 语速 / 热词）
+│   ├── translator.py    # 可插拔翻译源（MyMemory，默认关闭）
+│   └── demo_daily.py    # 声音日报：一天字幕统计 HTML
+│
+├── 诊断与自测/
+│   ├── probe.py         # 环境体检：能否抓到字幕窗口
+│   ├── debug_raw.py     # 打印字幕窗口原始演化（定位切句问题）
+│   ├── verify.py        # 综合校验
+│   ├── selftest_tts.py  # 闭环自测：念中文→转写→抓回→比对（+ _speak.py TTS 子进程）
+│   └── test_*.py        # 各模块单元测试（含 TTS→ASR 真实链路）
+│
+└── LICENSE / README.md / .gitignore
+```
+
+---
+
 ## 安装
 
 ```bash
@@ -110,20 +139,24 @@ python start.py probe        # 环境体检
 
 ---
 
-## 同类项目（Related work）
+## 同类项目对比（Related work）
 
-「保存实时字幕」是已知痛点，已有不少实现，思路都是 UI Automation 读屏。列在这里以示不掠美：
+「保存实时字幕」是已知痛点，已有不少实现，思路都是 UI Automation 读屏。数据取自 GitHub API（2026-10-01）：
 
-- [`corbamico/get-livecaptions-rs`](https://github.com/corbamico/get-livecaptions-rs) — Rust，最早（2024-05），双证 MIT/Apache
-- [`corbamico/get-livecaptions-cpp`](https://github.com/corbamico/get-livecaptions-cpp) — C++/WinRT 兄弟版
-- [`tomjimlondon/get-livecaptions`](https://github.com/tomjimlondon/get-livecaptions) — Rust + Slint 界面 + OpenAI 问答
-- [`SorMaze/LivecapSaver`](https://github.com/SorMaze/LivecapSaver) — Rust 命令行 TXT 保存
-- [`LiveCaptionsHelper/SaveLiveCaptions`](https://github.com/LiveCaptionsHelper/SaveLiveCaptions) — Python，浮层小面板，MIT，活跃
-- [`Tessie27/Live-Caption-Saver`](https://github.com/Tessie27/Live-Caption-Saver) — Python，OCR / Whisper 双模式
-- [`bocaj2222/LiveCaptionsLoggerJap`](https://github.com/bocaj2222/LiveCaptionsLoggerJap) — Java + Tesseract OCR，源自一道微软官方论坛提问
-- [`LunaTranslator`](https://github.com/HIllya51/LunaTranslator) — 翻译软件，内嵌"间接读取 LiveCaptions"模式
+| 项目 | 语言 | ★Star | 最近更新 | 特点 | 适合你吗 |
+|---|---|---:|---|---|---|
+| [SaveLiveCaptions](https://github.com/LiveCaptionsHelper/SaveLiveCaptions) | Python | 81 | 2026-06 | 浮层小面板，最简单直接的"存文件"工具，持续维护 | **最推荐直接用**：纯存档需求别自己造 |
+| [get-livecaptions-cpp](https://github.com/corbamico/get-livecaptions-cpp) | C++/WinRT | 25 | 2026-03 | 原生编译，轻量无运行时 | 想要原生 exe 可参考 |
+| [Live-Caption-Saver](https://github.com/Tessie27/Live-Caption-Saver) | Python | 10 | 2026-09 | OCR / Whisper 双模式（不依赖系统字幕） | 想要不依赖系统字幕时看 |
+| [LivecapSaver](https://github.com/SorMaze/LivecapSaver) | Rust | 5 | 2026-07 | 命令行 TXT 保存 | 想要 Rust CLI |
+| [get-livecaptions-rs](https://github.com/corbamico/get-livecaptions-rs) | Rust | 5 | 2026-03 | 最早的 Rust 版（2024-05） | 参考历史实现 |
+| [LiveCaptionsLoggerJap](https://github.com/bocaj2222/LiveCaptionsLoggerJap) | Java | 2 | 2025-08 | Tesseract OCR，源自一道微软官方论坛提问 | 日语场景 |
+| [LunaTranslator](https://github.com/HIllya51/LunaTranslator) | Python | 大型 | 活跃 | 翻译软件，内嵌"读 LiveCaptions"模式 | 想要翻译整合 |
+| [get-livecaptions](https://github.com/tomjimlondon/get-livecaptions) | Rust | 0 | 2024-09 | + Slint 界面 + OpenAI 问答（已停更） | 想加 AI 问答可借鉴思路 |
 
-本项目与它们的差异：更稳健的"累积日志"切句算法 + 一整套上层应用（而非只做存文件）。
+**结论**：如果你只想要"把字幕存成文件"，[SaveLiveCaptions](https://github.com/LiveCaptionsHelper/SaveLiveCaptions)（81★，Python，持续维护）已经是事实标准，直接用 / fork 即可，不必再维护自己的 `record.py`。
+
+本仓库的独特价值在别处：① 把字幕窗口**「累积日志」行为**的工程化处理——切句算法更抗乱序/重复（上面多数项目只取最后一行）；② 一套**上层应用**（语音遥控器 / 双语浮层 / 会议纪要 / 实时看板 / 声音日报），而非只做存文件；③ 纯 Python、零编译、好读好改，适合当"读屏笔记 + 实验沙盒"来学。
 
 ---
 
